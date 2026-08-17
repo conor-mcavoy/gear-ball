@@ -17,6 +17,23 @@ run s = applyMoves solvedGearBall (turns s)
 fullySolved :: Goal
 fullySolved = solvedGoal (Set.toList allSlots)
 
+-- Fixes a "yellow ring" that's otherwise correctly homed except the
+-- Red-Yellow and Purple-Yellow edges are swapped with each other - anchored
+-- to color identity throughout, so it doesn't matter which absolute face
+-- Yellow ended up on or what else is scrambled elsewhere.
+yellowRingFix :: GearBall -> Maybe [Move]
+yellowRingFix broken = search 4 allMoves isSolution broken
+  where
+    start = toBallState broken
+    isFixed st =
+      edgeHome Green Yellow st && edgeHome Blue Yellow st
+      && edgeHome Red Yellow st && edgeHome Purple Yellow st
+    protectSlots = Set.fromList
+      ( map faceVec allFaceLocations
+        ++ [edgeWithColors Green Yellow start, edgeWithColors Blue Yellow start]
+      )
+    isSolution st = isFixed st && preserves protectSlots start st
+
 check :: String -> Bool -> IO Bool
 check name ok = do
   putStrLn ((if ok then "PASS: " else "FAIL: ") ++ name)
@@ -41,15 +58,15 @@ main = do
     , check "invalid notation fails to parse" (parseMoves "Q" == Nothing)
     , check "out-of-range repeat count fails to parse" (parseMoves "R7" == Nothing)
     , check "search finds the trivial zero-move solution to an already-met goal"
-        (search 0 allMoves Set.empty fullySolved solvedGearBall == Just [])
+        (searchFor 0 allMoves Set.empty fullySolved solvedGearBall == Just [])
     , check "search finds R' as the shortest fix for a single R turn"
-        (search 3 allMoves Set.empty fullySolved (run "R") == Just [(Right, True)])
+        (searchFor 3 allMoves Set.empty fullySolved (run "R") == Just [(Right, True)])
     , check "restricting the moveset to U/D/F/B can't undo an R turn"
-        (search 6 (movesFor [Up, Down, Front, Back]) Set.empty fullySolved (run "R") == Nothing)
+        (searchFor 6 (movesFor [Up, Down, Front, Back]) Set.empty fullySolved (run "R") == Nothing)
     , check "without protection, F' is the obvious fix for Up's center after F"
-        (search 1 allMoves Set.empty (solvedGoal [faceVec Up]) (run "F") == Just [(Front, True)])
+        (searchFor 1 allMoves Set.empty (solvedGoal [faceVec Up]) (run "F") == Just [(Front, True)])
     , check "protecting URF forces search away from F' to a different single-move fix"
-        (search 3 allMoves (Set.singleton (cornerSlot Up Right Front)) (solvedGoal [faceVec Up]) (run "F")
+        (searchFor 3 allMoves (Set.singleton (cornerSlot Up Right Front)) (solvedGoal [faceVec Up]) (run "F")
           == Just [(Back, False)])
     , check "withTouchingCenters pulls in an edge's two neighboring centers"
         (withTouchingCenters [edgeSlot Front Up]
@@ -62,6 +79,10 @@ main = do
     , check "withTouchingCenters de-duplicates shared centers across slots"
         (withTouchingCenters [edgeSlot Front Up, edgeSlot Front Down]
           == Set.fromList [edgeSlot Front Up, edgeSlot Front Down, faceVec Front, faceVec Up, faceVec Down])
+    , check "yellow-ring parity fix (L U L' B') works from one concrete broken scramble"
+        (yellowRingFix (run "U L' F' L'") == Just [(Left, False), (Up, False), (Left, True), (Back, True)])
+    , check "the same fix also resolves a completely different broken scramble"
+        (yellowRingFix (run "U U R' F' L' D'") == Just [(Left, False), (Up, False), (Left, True), (Back, True)])
     ]
   if and results
     then putStrLn "All tests passed."

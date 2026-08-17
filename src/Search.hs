@@ -4,9 +4,17 @@ module Search
     , Goal(..)
     , goalFrom
     , solvedGoal
+    , matches
+    , preserves
     , allSlots
     , withTouchingCenters
+    , centerSlotOf
+    , edgeWithColors
+    , cornerWithColors
+    , edgeHome
+    , cornerHome
     , search
+    , searchFor
     ) where
 
 import Prelude hiding (Left, Right)
@@ -43,12 +51,22 @@ allSlots = Set.fromList (allCornerSlots ++ allEdgeSlots ++ map faceVec allFaceLo
 -- protect/goal slot list for edges and corners should be built through this,
 -- not passed raw - use the raw slot list directly only if you deliberately
 -- want centers left unconstrained.
+--
+-- Note this still only protects centers at their ABSOLUTE starting slot. If
+-- what you actually want is "correctly placed no matter how the whole ball
+-- ended up oriented", use edgeHome/cornerHome instead, which are anchored to
+-- color identity rather than fixed positions.
 withTouchingCenters :: [Vec3] -> Set Vec3
 withTouchingCenters slots =
   Set.fromList slots `Set.union` Set.fromList (concatMap (map faceVec . touchingFaces) slots)
 
 -- A partial description of a desired ball state: the listed slots must match
 -- the corresponding slots of `goalRef`. Slots not listed are unconstrained.
+-- This is an ABSOLUTE description - "slot X must hold Y" - which is exactly
+-- what you want when you're pinning down specific slots elsewhere too (e.g.
+-- via withTouchingCenters), but not what you want if all you actually know
+-- is "these two colors should be adjacent, wherever they currently are" -
+-- for that, use edgeHome/cornerHome instead.
 data Goal = Goal
   { goalSlots :: Set Vec3
   , goalRef   :: BallState
@@ -62,33 +80,95 @@ goalFrom ball slots = Goal (Set.fromList slots) (toBallState ball)
 solvedGoal :: [Vec3] -> Goal
 solvedGoal = goalFrom solvedGearBall
 
-matchesGoal :: Goal -> BallState -> Bool
-matchesGoal (Goal slots ref) st = all (\v -> slotValue v st == slotValue v ref) (Set.toList slots)
+-- Does the given state match the goal's reference at the goal's slots?
+matches :: Goal -> BallState -> Bool
+matches (Goal slots ref) st = all (\v -> slotValue v st == slotValue v ref) (Set.toList slots)
 
+-- Does `result` match `start` at every slot in the given set?
 preserves :: Set Vec3 -> BallState -> BallState -> Bool
 preserves protect start result = all (\v -> slotValue v result == slotValue v start) (Set.toList protect)
 
+-- The slot currently holding the center with this color. Errors if the color
+-- isn't present as a center in this state, which shouldn't happen for any
+-- state reachable from solvedGearBall.
+centerSlotOf :: Color -> BallState -> Vec3
+centerSlotOf c st = case [v | (v, c') <- Map.toList (bsCenters st), c' == c] of
+  [v] -> v
+  xs  -> error ("centerSlotOf: expected exactly one " ++ show c ++ " center, found " ++ show (length xs))
+
+sameTwo :: Color -> Color -> [Color] -> Bool
+sameTwo c1 c2 vs = vs == [c1, c2] || vs == [c2, c1]
+
+sameThree :: Color -> Color -> Color -> [Color] -> Bool
+sameThree c1 c2 c3 vs = all (`elem` vs) [c1, c2, c3] && all (`elem` [c1, c2, c3]) vs
+
+-- The slot currently holding the edge carrying exactly these two colors.
+edgeWithColors :: Color -> Color -> BallState -> Vec3
+edgeWithColors c1 c2 st =
+  case [v | (v, (m, _)) <- Map.toList (bsEdges st), sameTwo c1 c2 (Map.elems m)] of
+    [v] -> v
+    xs  -> error ("edgeWithColors: expected exactly one match, found " ++ show (length xs))
+
+-- The slot currently holding the corner carrying exactly these three colors.
+cornerWithColors :: Color -> Color -> Color -> BallState -> Vec3
+cornerWithColors c1 c2 c3 st =
+  case [v | (v, m) <- Map.toList (bsCorners st), sameThree c1 c2 c3 (Map.elems m)] of
+    [v] -> v
+    xs  -> error ("cornerWithColors: expected exactly one match, found " ++ show (length xs))
+
+-- Is the {c1,c2} edge sitting exactly between wherever the c1 and c2 centers
+-- currently are, with c1 facing the c1 center and c2 facing the c2 center?
+-- This is rotation-agnostic: it doesn't care WHERE those centers ended up,
+-- only that the edge is correctly placed and wing-oriented relative to them.
+-- It does NOT check hex-orientation - "home" here is about position and
+-- wing, not gear rotation.
+edgeHome :: Color -> Color -> BallState -> Bool
+edgeHome c1 c2 st =
+  let p1 = centerSlotOf c1 st
+      p2 = centerSlotOf c2 st
+      slot = p1 `addVec3` p2
+  in case Map.lookup slot (bsEdges st) of
+       Just (inner, _) -> Map.lookup p1 inner == Just c1 && Map.lookup p2 inner == Just c2
+       Nothing -> False
+
+-- As edgeHome, for a corner and its three neighboring centers.
+cornerHome :: Color -> Color -> Color -> BallState -> Bool
+cornerHome c1 c2 c3 st =
+  let p1 = centerSlotOf c1 st
+      p2 = centerSlotOf c2 st
+      p3 = centerSlotOf c3 st
+      slot = p1 `addVec3` p2 `addVec3` p3
+  in case Map.lookup slot (bsCorners st) of
+       Just inner ->
+         Map.lookup p1 inner == Just c1 && Map.lookup p2 inner == Just c2 && Map.lookup p3 inner == Just c3
+       Nothing -> False
+
 -- Iterative-deepening search for the shortest sequence of moves, drawn only
--- from `moves`, that reaches `goal` while leaving every slot in `protect`
--- exactly as it started (position and orientation) - anything not in
--- `protect` is free to be disrupted. Tries every sequence of length 0, then
--- every sequence of length 1, etc., up to `maxLen`, so the first solution
--- found is shortest; returns Nothing if none exists within `maxLen` moves.
+-- from `moves`, reaching a state satisfying `isSolution`. Tries every
+-- sequence of length 0, then every sequence of length 1, etc., up to
+-- `maxLen`, so the first solution found is shortest; returns Nothing if none
+-- exists within `maxLen` moves.
+--
+-- `isSolution` is checked only against the state after the moves are
+-- applied - build it out of matches/preserves/edgeHome/cornerHome (or your
+-- own predicate) depending on whether "success" means matching an absolute
+-- reference, staying fixed relative to how the search started, or being
+-- correctly placed relative to wherever colors ended up.
 --
 -- A move is never immediately followed by its own inverse (that's always
 -- wasted length), but otherwise this explores naively - no commutators yet.
-search :: Int -> [Move] -> Set Vec3 -> Goal -> GearBall -> Maybe [Move]
-search maxLen moves protect goal ball = firstJust [searchExact d | d <- [0 .. maxLen]]
+search :: Int -> [Move] -> (BallState -> Bool) -> GearBall -> Maybe [Move]
+search maxLen moves isSolution ball = firstJust [searchExact d | d <- [0 .. maxLen]]
   where
     start = toBallState ball
 
-    -- DFS restricted to exactly `k` more moves; only checks the goal once
-    -- `k` reaches 0, so a call to `searchExact d` only ever returns
+    -- DFS restricted to exactly `k` more moves; only checks `isSolution`
+    -- once `k` reaches 0, so a call to `searchExact d` only ever returns
     -- sequences of length exactly `d`.
     searchExact d = go d [] start Nothing
       where
         go 0 acc st _
-          | matchesGoal goal st && preserves protect start st = Just (reverse acc)
+          | isSolution st = Just (reverse acc)
           | otherwise = Nothing
         go k acc st prevMove =
           firstJust
@@ -101,3 +181,10 @@ search maxLen moves protect goal ball = firstJust [searchExact d | d <- [0 .. ma
     isInverse (Just (f0, p0)) (f, p) = f0 == f && p0 /= p
 
     firstJust = foldr (\x r -> maybe r Just x) Nothing
+
+-- Convenience for the common case: reach `goal` while preserving `protect`
+-- exactly as `ball` started. Equivalent to calling `search` directly with
+-- `\st -> matches goal st && preserves protect (toBallState ball) st`.
+searchFor :: Int -> [Move] -> Set Vec3 -> Goal -> GearBall -> Maybe [Move]
+searchFor maxLen moves protect goal ball =
+  search maxLen moves (\st -> matches goal st && preserves protect (toBallState ball) st) ball
