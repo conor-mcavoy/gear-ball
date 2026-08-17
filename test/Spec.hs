@@ -1,6 +1,9 @@
 module Main (main) where
 
+import Prelude hiding (Left, Right)
 import Lib
+import Search
+import qualified Data.Set as Set
 import System.Exit (exitFailure)
 
 turns :: String -> [Turn]
@@ -10,6 +13,9 @@ turns s = case parseMoves s of
 
 run :: String -> GearBall
 run s = applyMoves solvedGearBall (turns s)
+
+fullySolved :: Goal
+fullySolved = solvedGoal (Set.toList allSlots)
 
 check :: String -> Bool -> IO Bool
 check name ok = do
@@ -34,6 +40,17 @@ main = do
     , check "R L' is not literally the original orientation" (not (isSolved (run "R L'")))
     , check "invalid notation fails to parse" (parseMoves "Q" == Nothing)
     , check "out-of-range repeat count fails to parse" (parseMoves "R7" == Nothing)
+    , check "search finds the trivial zero-move solution to an already-met goal"
+        (search 0 allMoves Set.empty fullySolved solvedGearBall == Just [])
+    , check "search finds R' as the shortest fix for a single R turn"
+        (search 3 allMoves Set.empty fullySolved (run "R") == Just [(Right, True)])
+    , check "restricting the moveset to U/D/F/B can't undo an R turn"
+        (search 6 (movesFor [Up, Down, Front, Back]) Set.empty fullySolved (run "R") == Nothing)
+    , check "without protection, F' is the obvious fix for Up's center after F"
+        (search 1 allMoves Set.empty (solvedGoal [faceVec Up]) (run "F") == Just [(Front, True)])
+    , check "protecting URF forces search away from F' to a different single-move fix"
+        (search 3 allMoves (Set.singleton (cornerSlot Up Right Front)) (solvedGoal [faceVec Up]) (run "F")
+          == Just [(Back, False)])
     ]
   if and results
     then putStrLn "All tests passed."

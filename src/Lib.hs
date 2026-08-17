@@ -18,6 +18,27 @@ module Lib
     , parseMoves
     , applyTurn
     , applyMoves
+      -- * Geometry (exposed for Search)
+    , Vec3
+    , faceVec
+    , opposite
+    , allFaceLocations
+    , addVec3
+    , cornerSlot
+    , edgeSlot
+    , allCornerSlots
+    , allEdgeSlots
+      -- * Ball state (exposed for Search)
+    , BallState(..)
+    , toBallState
+    , fromBallState
+    , applyBaseTurn
+      -- * Primitive moves
+    , Move
+    , allMoves
+    , movesFor
+    , renderMove
+    , renderMoves
     ) where
 
 import Prelude hiding (Left, Right)
@@ -120,6 +141,17 @@ dot (a, b, c) (d, e, f) = a * d + b * e + c * f
 
 subVec :: Vec3 -> Vec3 -> Vec3
 subVec (a, b, c) (d, e, f) = (a - d, b - e, c - f)
+
+addVec3 :: Vec3 -> Vec3 -> Vec3
+addVec3 (a, b, c) (d, e, f) = (a + d, b + e, c + f)
+
+-- The corner slot touching the three given faces (any order).
+cornerSlot :: FaceLocation -> FaceLocation -> FaceLocation -> Vec3
+cornerSlot a b c = faceVec a `addVec3` faceVec b `addVec3` faceVec c
+
+-- The edge slot touching the two given faces (any order).
+edgeSlot :: FaceLocation -> FaceLocation -> Vec3
+edgeSlot a b = faceVec a `addVec3` faceVec b
 
 -- A 180-degree spin about the axis running through `face` and its opposite.
 -- 180 degrees is its own inverse, so this doesn't depend on turn direction,
@@ -308,11 +340,10 @@ isSolved = (== solvedGearBall)
 isSolvedUpToReorientation :: GearBall -> Bool
 isSolvedUpToReorientation (GearBall f1 f2 f3 f4 f5 f6) = all isFaceUniform [f1, f2, f3, f4, f5, f6]
   where
-    isFaceUniform (Face _ c0 c1 c2 c3 e0 e1 e2 e3 (Center col)) = case
-      [facingCorner c0, facingCorner c1, facingCorner c2, facingCorner c3
-      ,facingEdge e0, facingEdge e1, facingEdge e2, facingEdge e3, col] of
-        (c : cs) -> all (== c) cs
-        []       -> True
+    isFaceUniform (Face _ c0 c1 c2 c3 e0 e1 e2 e3 (Center col)) =
+      all (== col)
+        [facingCorner c0, facingCorner c1, facingCorner c2, facingCorner c3
+        ,facingEdge e0, facingEdge e1, facingEdge e2, facingEdge e3]
       where
         facingCorner (Corner a _ _) = a
         facingEdge (HexEdge a _ _) = a
@@ -403,3 +434,35 @@ parseTurn (c : rest) = do
 -- Parses a whitespace-separated sequence of moves, e.g. "R U F' D2".
 parseMoves :: String -> Maybe [Turn]
 parseMoves = traverse parseTurn . words
+
+faceChar :: FaceLocation -> Char
+faceChar Right = 'R'
+faceChar Left  = 'L'
+faceChar Up    = 'U'
+faceChar Down  = 'D'
+faceChar Front = 'F'
+faceChar Back  = 'B'
+
+--------------------------------------------------------------------------------
+-- Primitive moves
+--
+-- A single 180-degree turn - the atom that Search builds sequences out of.
+-- Unlike Turn, there's no repeat count: "R2" is just the two-element sequence
+-- [(Right, False), (Right, False)].
+--------------------------------------------------------------------------------
+
+type Move = (FaceLocation, Bool)
+
+allMoves :: [Move]
+allMoves = [(f, p) | f <- allFaceLocations, p <- [False, True]]
+
+-- Both directions of just the given faces, e.g. `movesFor [Right, Front, Up]`
+-- to restrict a search to R/R'/F/F'/U/U'.
+movesFor :: [FaceLocation] -> [Move]
+movesFor faces = [(f, p) | f <- faces, p <- [False, True]]
+
+renderMove :: Move -> String
+renderMove (f, isPrime) = faceChar f : if isPrime then "'" else ""
+
+renderMoves :: [Move] -> String
+renderMoves = unwords . map renderMove
