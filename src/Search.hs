@@ -5,6 +5,7 @@ module Search
     , goalFrom
     , solvedGoal
     , allSlots
+    , withTouchingCenters
     , search
     ) where
 
@@ -33,6 +34,18 @@ slotValue v st = case Map.lookup v (bsCorners st) of
 
 allSlots :: Set Vec3
 allSlots = Set.fromList (allCornerSlots ++ allEdgeSlots ++ map faceVec allFaceLocations)
+
+-- Add the centers touching each given slot to the set. "This edge/corner is
+-- in the right place" is only meaningful together with "and its neighboring
+-- centers are too" - an edge/corner slot matching some reference is a hollow
+-- win if the centers that give that slot its meaning were free to wander off
+-- to a different position while the search wasn't looking. Almost every
+-- protect/goal slot list for edges and corners should be built through this,
+-- not passed raw - use the raw slot list directly only if you deliberately
+-- want centers left unconstrained.
+withTouchingCenters :: [Vec3] -> Set Vec3
+withTouchingCenters slots =
+  Set.fromList slots `Set.union` Set.fromList (concatMap (map faceVec . touchingFaces) slots)
 
 -- A partial description of a desired ball state: the listed slots must match
 -- the corresponding slots of `goalRef`. Slots not listed are unconstrained.

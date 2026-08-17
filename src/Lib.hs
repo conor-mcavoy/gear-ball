@@ -28,6 +28,7 @@ module Lib
     , edgeSlot
     , allCornerSlots
     , allEdgeSlots
+    , touchingFaces
       -- * Ball state (exposed for Search)
     , BallState(..)
     , toBallState

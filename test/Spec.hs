@@ -51,6 +51,17 @@ main = do
     , check "protecting URF forces search away from F' to a different single-move fix"
         (search 3 allMoves (Set.singleton (cornerSlot Up Right Front)) (solvedGoal [faceVec Up]) (run "F")
           == Just [(Back, False)])
+    , check "withTouchingCenters pulls in an edge's two neighboring centers"
+        (withTouchingCenters [edgeSlot Front Up]
+          == Set.fromList [edgeSlot Front Up, faceVec Front, faceVec Up])
+    , check "withTouchingCenters pulls in a corner's three neighboring centers"
+        (withTouchingCenters [cornerSlot Up Right Front]
+          == Set.fromList [cornerSlot Up Right Front, faceVec Up, faceVec Right, faceVec Front])
+    , check "withTouchingCenters on a center slot is a no-op"
+        (withTouchingCenters [faceVec Up] == Set.singleton (faceVec Up))
+    , check "withTouchingCenters de-duplicates shared centers across slots"
+        (withTouchingCenters [edgeSlot Front Up, edgeSlot Front Down]
+          == Set.fromList [edgeSlot Front Up, edgeSlot Front Down, faceVec Front, faceVec Up, faceVec Down])
     ]
   if and results
     then putStrLn "All tests passed."
