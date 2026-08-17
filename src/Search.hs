@@ -13,6 +13,9 @@ module Search
     , cornerWithColors
     , edgeHome
     , cornerHome
+    , Relabeling
+    , edgeRelocated
+    , cornerRelocated
     , search
     , searchFor
     ) where
@@ -142,6 +145,42 @@ cornerHome c1 c2 c3 st =
        Just inner ->
          Map.lookup p1 inner == Just c1 && Map.lookup p2 inner == Just c2 && Map.lookup p3 inner == Just c3
        Nothing -> False
+
+-- An explicit correspondence between old and new facing directions for one
+-- piece - e.g. [(Front,Front),(Right,Left)] for "FR moves to FL, with the
+-- color facing Front staying on Front and the color facing Right now facing
+-- Left." Two entries for an edge, three for a corner. This says exactly
+-- what "FR to FL" colloquially means (as opposed to "FR to LF", a different
+-- instruction) - it's the caller's job to state the correspondence, not
+-- something to infer from which direction happens to be shared, since nothing
+-- about the puzzle privileges that reading and it doesn't even make sense
+-- when the two slots share no direction at all.
+type Relabeling = [(FaceLocation, FaceLocation)]
+
+fromSlotOf :: Relabeling -> Vec3
+fromSlotOf = foldr1 addVec3 . map (faceVec . fst)
+
+toSlotOf :: Relabeling -> Vec3
+toSlotOf = foldr1 addVec3 . map (faceVec . snd)
+
+-- Purely positional, color-blind check: does the edge now at the mapping's
+-- target slot show exactly what the mapping says it should, given what was
+-- at the source slot in `start`? Doesn't check hex-orientation - this is
+-- about position and wing, not gear rotation.
+edgeRelocated :: Relabeling -> BallState -> BallState -> Bool
+edgeRelocated mapping start result =
+  case (Map.lookup (fromSlotOf mapping) (bsEdges start), Map.lookup (toSlotOf mapping) (bsEdges result)) of
+    (Just (fromInner, _), Just (toInner, _)) ->
+      toInner == Map.fromList [(faceVec toF, fromInner Map.! faceVec fromF) | (fromF, toF) <- mapping]
+    _ -> False
+
+-- As edgeRelocated, for a corner (a three-entry Relabeling).
+cornerRelocated :: Relabeling -> BallState -> BallState -> Bool
+cornerRelocated mapping start result =
+  case (Map.lookup (fromSlotOf mapping) (bsCorners start), Map.lookup (toSlotOf mapping) (bsCorners result)) of
+    (Just fromInner, Just toInner) ->
+      toInner == Map.fromList [(faceVec toF, fromInner Map.! faceVec fromF) | (fromF, toF) <- mapping]
+    _ -> False
 
 -- Iterative-deepening search for the shortest sequence of moves, drawn only
 -- from `moves`, reaching a state satisfying `isSolution`. Tries every

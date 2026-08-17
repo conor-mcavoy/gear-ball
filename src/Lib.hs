@@ -34,6 +34,8 @@ module Lib
     , toBallState
     , fromBallState
     , applyBaseTurn
+    , reorientBallState
+    , reorientBall
       -- * Primitive moves
     , Move
     , allMoves
@@ -400,6 +402,22 @@ applyBaseTurn face isPrime (BallState cs es ctrs) = BallState
 applyTurn :: GearBall -> Turn -> GearBall
 applyTurn ball (Turn face isPrime n) =
   fromBallState (iterate (applyBaseTurn face isPrime) (toBallState ball) !! n)
+
+-- Pick the whole ball up and re-hold it, 90 degrees clockwise as viewed from
+-- `face` (or counter-clockwise if `isPrime`). Unlike applyBaseTurn, this
+-- isn't a puzzle move - no gears mesh, nothing on the ball itself turns
+-- relative to anything else - so it applies uniformly to every corner, edge
+-- and center alike, and never touches a HexOrientation.
+reorientBallState :: FaceLocation -> Bool -> BallState -> BallState
+reorientBallState face isPrime (BallState cs es ctrs) = BallState
+  { bsCorners = Map.fromList [(rot pos, Map.mapKeys rot inner) | (pos, inner) <- Map.toList cs]
+  , bsEdges   = Map.fromList [(rot pos, (Map.mapKeys rot inner, orient)) | (pos, (inner, orient)) <- Map.toList es]
+  , bsCenters = Map.fromList [(rot pos, col) | (pos, col) <- Map.toList ctrs]
+  }
+  where rot = slice90CW (if isPrime then opposite face else face)
+
+reorientBall :: FaceLocation -> Bool -> GearBall -> GearBall
+reorientBall face isPrime = fromBallState . reorientBallState face isPrime . toBallState
 
 applyMoves :: GearBall -> [Turn] -> GearBall
 applyMoves = foldl' applyTurn

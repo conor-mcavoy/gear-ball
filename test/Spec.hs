@@ -34,6 +34,23 @@ yellowRingFix broken = search 4 allMoves isSolution broken
       )
     isSolution st = isFixed st && preserves protectSlots start st
 
+-- Fixes a genuine FR/FL edge swap: F stays F, R becomes L (and vice versa) -
+-- purely positional, no color lookups at all. Protects FU, FD, and every
+-- center exactly as they started. This is the "purely about moving pieces
+-- around" reading of "swap FR and FL" - edgeRelocated states the
+-- correspondence explicitly rather than inferring it from a shared face.
+frFlSwapFix :: GearBall -> Maybe [Move]
+frFlSwapFix broken = search 8 allMoves isSolution broken
+  where
+    start = toBallState broken
+    frToFl = [(Front, Front), (Right, Left)]
+    flToFr = [(Front, Front), (Left, Right)]
+    protectSlots = Set.fromList
+      (map faceVec allFaceLocations ++ [edgeSlot Front Up, edgeSlot Front Down])
+    isSolution st =
+      edgeRelocated frToFl start st && edgeRelocated flToFr start st
+      && preserves protectSlots start st
+
 check :: String -> Bool -> IO Bool
 check name ok = do
   putStrLn ((if ok then "PASS: " else "FAIL: ") ++ name)
@@ -83,6 +100,15 @@ main = do
         (yellowRingFix (run "U L' F' L'") == Just [(Left, False), (Up, False), (Left, True), (Back, True)])
     , check "the same fix also resolves a completely different broken scramble"
         (yellowRingFix (run "U U R' F' L' D'") == Just [(Left, False), (Up, False), (Left, True), (Back, True)])
+    , check "a genuine positional FR/FL swap (U2 F U2 F) needs more than 4 moves"
+        (frFlSwapFix (run "U L' F' L'")
+          == Just [(Up, False), (Up, False), (Front, False), (Up, False), (Up, False), (Front, False)])
+    , check "edgeRelocated distinguishes FR-to-FL from the flipped FR-to-LF"
+        (let start = toBallState (run "U L' F' L'")
+             result = toBallState (applyMoves (run "U L' F' L'") (turns "U2 F U2 F"))
+             frToFl = [(Front, Front), (Right, Left)]
+             frToLf = [(Front, Left), (Right, Front)]
+         in edgeRelocated frToFl start result && not (edgeRelocated frToLf start result))
     ]
   if and results
     then putStrLn "All tests passed."
