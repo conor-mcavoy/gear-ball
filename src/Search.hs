@@ -17,7 +17,9 @@ module Search
     , edgeRelocated
     , cornerRelocated
     , search
+    , searchAll
     , searchFor
+    , searchAllFor
     ) where
 
 import Prelude hiding (Left, Right)
@@ -26,6 +28,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe)
 
 -- The content of a single slot, comparable regardless of whether it's a
 -- corner, edge, or center - used to check both goals and protected regions
@@ -197,7 +200,22 @@ cornerRelocated mapping start result =
 -- A move is never immediately followed by its own inverse (that's always
 -- wasted length), but otherwise this explores naively - no commutators yet.
 search :: Int -> [Move] -> (BallState -> Bool) -> GearBall -> Maybe [Move]
-search maxLen moves isSolution ball = firstJust [searchExact d | d <- [0 .. maxLen]]
+search maxLen moves isSolution ball = listToMaybe (searchAll maxLen moves isSolution ball)
+
+-- Every sequence up to `maxLen` satisfying the predicate, shortest first (and
+-- within a length, in the order `moves` lists them). Produced lazily, so
+-- `take n` only does the work for the first n - `search` is just this with
+-- `listToMaybe` on the front.
+--
+-- This is the entry point for "give me candidates to choose between" rather
+-- than "give me the one shortest answer". It stays deliberately ignorant of
+-- how nice the results are to actually perform - rank the output with
+-- `Ergonomics.score` (or any other criterion) afterwards. Keeping the two
+-- apart matters: the shortest algorithm and the most comfortable one are
+-- routinely different sequences, and a searcher that optimised for both at
+-- once could not show you the trade.
+searchAll :: Int -> [Move] -> (BallState -> Bool) -> GearBall -> [[Move]]
+searchAll maxLen moves isSolution ball = concat [searchExact d | d <- [0 .. maxLen]]
   where
     start = toBallState ball
 
@@ -206,11 +224,9 @@ search maxLen moves isSolution ball = firstJust [searchExact d | d <- [0 .. maxL
     -- sequences of length exactly `d`.
     searchExact d = go d [] start Nothing
       where
-        go 0 acc st _
-          | isSolution st = Just (reverse acc)
-          | otherwise = Nothing
+        go 0 acc st _ = [reverse acc | isSolution st]
         go k acc st prevMove =
-          firstJust
+          concat
             [ go (k - 1) (m : acc) (applyBaseTurn f p st) (Just m)
             | m@(f, p) <- moves
             , not (isInverse prevMove m)
@@ -219,11 +235,14 @@ search maxLen moves isSolution ball = firstJust [searchExact d | d <- [0 .. maxL
     isInverse Nothing _ = False
     isInverse (Just (f0, p0)) (f, p) = f0 == f && p0 /= p
 
-    firstJust = foldr (\x r -> maybe r Just x) Nothing
-
 -- Convenience for the common case: reach `goal` while preserving `protect`
 -- exactly as `ball` started. Equivalent to calling `search` directly with
 -- `\st -> matches goal st && preserves protect (toBallState ball) st`.
 searchFor :: Int -> [Move] -> Set Vec3 -> Goal -> GearBall -> Maybe [Move]
 searchFor maxLen moves protect goal ball =
   search maxLen moves (\st -> matches goal st && preserves protect (toBallState ball) st) ball
+
+-- As searchFor, but every candidate rather than just the shortest.
+searchAllFor :: Int -> [Move] -> Set Vec3 -> Goal -> GearBall -> [[Move]]
+searchAllFor maxLen moves protect goal ball =
+  searchAll maxLen moves (\st -> matches goal st && preserves protect (toBallState ball) st) ball

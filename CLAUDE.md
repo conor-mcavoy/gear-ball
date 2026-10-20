@@ -8,12 +8,10 @@ building-phase techniques and algorithms toward a full solving method.
 ## Physical mechanics (established facts)
 
 - **Every legal turn is 180°.** A 90° turn leaves the gearing misaligned and isn't a
-  valid state. So "R" in our notation always means what old-style notation would call
-  R2 — there's no separate "single quarter turn" primitive.
+  valid state. So "R" in our notation always means what classic-style notation would call
+  R2 — there's no "single quarter turn" primitive.
 - **A turn does two things at once.** Turning face X 180° (clockwise, viewed from X):
-  - X's own layer (its 4 corners + 4 edges) relocates 180° within itself, *unchanged*
-    as addressed from X — corner/edge color arrangement doesn't change, gears don't
-    turn.
+  - X's own layer (its 4 corners + 4 edges) relocates 180° within itself, as expected.
   - The parallel slice (the 4 centers + 4 edges not touching X or its opposite) gets
     dragged 90° clockwise (as viewed from X) by gear meshing, and each of those slice
     edges' hex-gear advances one notch clockwise (`One`). The opposite face's layer
@@ -21,49 +19,39 @@ building-phase techniques and algorithms toward a full solving method.
   - Counter-clockwise (X') does the same 180° to X's own layer (180° is its own
     inverse, so direction doesn't matter there), but drags the slice the *other* way
     and the gear notch goes the other way (`Five`, i.e. -1 mod 6).
-- **A single move has order 12.** 12 consecutive same-face turns return to solved
-  (verified); `R` and `R'` are true inverses of each other, not self-inverse.
+- **A single move has order 12.** 12 consecutive same-face turns return to solved.
 - **Opposite-face turns are equivalent up to reorientation.** `R L'` is a pure
-  whole-ball rotation (every face shows one uniform color afterward, just relabeled) —
-  not a scramble. This generalizes: any face's turn ≈ its opposite's turn, differing
-  only by which way the whole ball ends up facing.
+  whole-ball rotation.
 - **Corners can only ever be permuted, never twisted**, by any sequence of moves
   whatsoever. Proof sketch: every operation touching a corner is a 180° rotation about
-  one of the 3 cube axes; these three rotations plus identity form a Klein four-group
-  (abelian, every non-identity element an involution), and no non-identity element of
-  that group fixes an all-±1 corner position. So a corner returning to its original
-  slot must have accumulated the identity transform — no twist is possible. This means
-  a "corners-first" method, if viable, reduces to a pure 8-element permutation problem
-  with zero orientation bookkeeping.
+  one of the 3 cube axes, so this is like the R2L2U2D2F2B2 state of a 3x3.
 - **Edges are heavily paired/constrained**, much more than a standard 3x3 (this
   puzzle's 180-only move set is structurally similar to the "double-move-only" 3x3
-  variant). Empirically confirmed (zero violations across tens of thousands of
-  reachable states): two edges sharing one color, whose other two colors are opposite
+  variant). For example: two edges sharing one color, whose other two colors are opposite
   each other (e.g. Red-Yellow and Purple-Yellow, since Red/Purple are opposite), are
   always either cube-opposite (antipodal slots) or face-opposite with the shared
-  color's center adjacent to *both* or *neither* — never a mixed case. Their
-  hex-orientations always match exactly. This is why large chunks of the ball "fall
+  color's center adjacent to *both* or *neither*. There are no other possible positions.
+  Hex-orientations of such edges also always match exactly. This is why large chunks of the ball "fall
   into place" once a few pieces are positioned correctly during manual solving.
 
 ## Source layout
 
 - **`src/Lib.hs`** — the static representation and the turn engine.
 - **`src/Search.hs`** — the constrained-search toolkit built on top of `Lib`.
+- **`src/Ergonomics.hs`** — scores how pleasant an algorithm is to *perform*.
 - **`app/Main.hs`** — minimal demo (not load-bearing).
 - **`test/Spec.hs`** — plain-assertion test suite (no framework — see Build notes).
 
 ## Static representation (`Lib.hs`)
 
 Straightforward ADTs: `Color` (6 values), `HexOrientation` (`Zero`..`Five`, a plain
-mod-6 accumulator of gear turns — *not* redefined relative to which color is listed
-first), `HexEdge Color Color HexOrientation`, `Corner Color Color Color`, `Center
+mod-6 accumulator of gear turns),
+`HexEdge Color Color HexOrientation`, `Corner Color Color Color`, `Center
 Color`, `Face FaceLocation Corner×4 HexEdge×4 Center`, `GearBall Face×6`. Convention
 throughout: the first-listed color is whichever one faces the addressing face; for
 corners the second color is the next one clockwise.
 
-`FaceLocation` is `Up | Down | Left | Right | Front | Back` — note `Left`/`Right`
-collide with `Prelude`'s `Either` constructors once you actually use them, so every
-module that touches them starts with `import Prelude hiding (Left, Right)`.
+`FaceLocation` is `Up | Down | Left | Right | Front | Back`.
 
 `solvedGearBall` uses the fixed assignment Up=Yellow, Down=Orange, Left=Purple,
 Right=Red, Front=Blue, Back=Green.
@@ -74,19 +62,15 @@ Pieces are addressed by position in a fixed ±1 coordinate frame (`type Vec3 =
 (Int,Int,Int)`, Right=+x/Up=+y/Front=+z and opposites). A corner sits at an all-±1
 point, an edge at a point with exactly one 0, a center at a unit vector. This lets
 every one of the 6 possible face turns share the same rotation math (`faceSpin180`
-for the 180° own-layer part, `slice90CW` for the 90° slice-drag part) instead of
-hand-transcribing 6 separate permutations.
+for the 180° own-layer part, `slice90CW` for the 90° slice-drag part).
 
 `BallState` is the internal position-indexed representation (`Map Vec3 (Map Vec3
 Color)` for corners, similar-with-orientation for edges, `Map Vec3 Color` for
 centers) — used for all move computation. `toBallState`/`fromBallState` convert
-to/from the public `GearBall`. `applyBaseTurn :: FaceLocation -> Bool -> BallState ->
-BallState` is the one real primitive; everything else composes it.
+to/from the public `GearBall`.
 
 `reorientBall`/`reorientBallState` pick the whole ball up and re-hold it 90° from a
-given face — *not* a puzzle move (no gears mesh), so it applies uniformly to every
-corner/edge/center and never touches a `HexOrientation`. Useful for constructing test
-scenarios with a piece on a specific axis.
+given face.
 
 ## Notation (`Lib.hs`)
 
@@ -107,14 +91,10 @@ search :: Int -> [Move] -> (BallState -> Bool) -> GearBall -> Maybe [Move]
 ```
 
 Iterative-deepening search (tries all length-0 sequences, then length-1, etc., up to
-`maxLen`) for the *shortest* sequence, drawn only from the given move alphabet,
-reaching a state satisfying an arbitrary predicate. Prunes only the immediate-inverse
-case (never appends a move that's the direct inverse of the previous one — legitimate
-here since moves have order 12, not order 2/4 like a 3x3, so don't reuse 3x3 pruning
-intuitions). No commutator support yet — this is intentionally the "naive" version.
+`maxLen`) for the *shortest* sequence, reaching a state satisfying an arbitrary predicate.
+No commutator support yet, never really needed it.
 
-The predicate is where all the design care lives. Two genuinely different kinds of
-question keep coming up, and they need different tools:
+The predicate is where all the design care lives:
 
 **"Is this piece correctly placed relative to its own colors, wherever those colors
 currently are?"** — rotation-agnostic, useful for verifying something is correct
@@ -154,41 +134,32 @@ solved):
 - `allSlots` — every corner/edge/center slot, useful with `Set.difference` for "protect
   everything except the target."
 
-## Verified algorithms found so far
+## Ergonomics (`Ergonomics.hs`)
 
-- **Yellow-ring 2-edge-swap fix (color-anchored):** given a "ring" of 4 edges around
-  one center where 2 are correctly home and the other 2 are swapped with each other,
-  `L U L' B'` fixes it — verified reusable across 8+ independently-generated
-  scrambles regardless of which absolute face the ring's center ended up on. Built
-  with `edgeHome`/`preserves`(all 6 centers) + the 2 known-good edges.
-- **Genuine positional FR/FL swap:** protecting FU, FD, and all 6 centers exactly,
-  swapping FR↔FL as an explicit `Relabeling` (F stays F, R↔L), the shortest fix is
-  `U2 F U2 F` (6 moves) — confirmed longer than naive attempts, consistent with this
-  being a real parity-type fix.
+Scores an algorithm by how comfortable it is to perform, not how short it is.
 
-These two are examples of the same underlying situation described two different ways
-(color-relative vs. positional) — worth keeping both framings in mind when searching:
-color-relative goals tend to find shorter, more "opportunistic" fixes that exploit
-whatever else happens to already be in place; positional goals find the fix for the
-literal request, which is usually longer but means what it says.
+The physical model (from handling the real ball):
 
-## Solving-method exploration status (empirical, not yet systematized)
+- **Face costs** — `R`/`L` = 1 (your hands are already there), `U` = 1.5,
+  `D`/`F`/`B` = 2 (awkward regrip). Turning the *same face twice in a row* costs 2
+  for the repeat regardless of face — the hand has to fully reset. So `R2` costs 3, for example.
+- **The two-handed re-hold.** An `R` or `L` turn can be done with each hand turning
+  90° instead of one hand turning 180°. The gear-drag on the middle slice exactly
+  cancels the whole-ball rotation, so *the centers stay fixed in space* while the
+  ball ends up re-held 90° round. Free, and it can turn a later awkward face into a
+  `U`. The four pairings are `R`≡`R x'`, `R'`≡`R' x`, `L`≡`L x`, `L'`≡`L' x'`. 
+  Whenever possible, we can substitute these moves to cause later moves to be more
+  ergonomic. E.g. `R' F` can be `R' x U`, costing 1 + 1.5 rather than 1 + 2.
 
-- The "build a layer/cross freely, ignore the rest" 3x3 intuition partially applies
-  but is complicated by every move disrupting roughly 2/3 of the ball (vs. 1/3 on a
-  3x3) — a "building phase" needs the constrained search above to find safe sequences,
-  it's not generally achievable by casual/intuitive manipulation the way early 3x3
-  layers are.
-- Placing one ring edge correctly (position, ignoring hex-orientation) forces the
-  entire ring correctly into place, given correct centers — a large amount of
-  structure "falls out for free," per the edge-pairing facts above.
-- A real parity-like obstruction exists: sometimes 2 of a ring's 4 edges go in easily
-  and the other 2 are stuck swapped with each other, un-fixable by naive 2-edge
-  manipulation alone (see the verified 6-move fix above).
-- No general "phase 1 / phase 2 / phase 3" method has been nailed down yet. Corners
-  are known to need only permutation-fixing (never orientation, see the proof above),
-  which should make a corners-first or corners-last phase simpler than the equivalent
-  on a 3x3.
+`score` gives the cheapest execution in the hold as written; `bestHold` minimises
+over all 24 starting holds, which is only legitimate when the target is specified up
+to whole-ball rotation (re-holding first means the algorithm performs a *rotated*
+version of its operation). `renderExecution` prints the result with the free
+re-holds shown as `x`/`x'`; `verifyExecution` re-runs an execution through the
+engine and checks it matches the original algorithm up to the leftover rotation.
+
+See `ALGORITHMS.md` for the best algorithms found so far.
+See `METHOD.md` for general explanation of how to solve the ball.
 
 ## Build notes
 
@@ -200,14 +171,4 @@ literal request, which is usually longer but means what it says.
   it on build (has its own embedded hpack even though no standalone `hpack` binary is
   installed) — don't hand-edit the `.cabal` file, and don't bother listing modules
   explicitly in `package.yaml`, they're auto-discovered from `src/`.
-
-## Natural next steps
-
-- Extend `search` with commutator support — naive IDDFS is fine through ~depth 6-7 but
-  gets slow beyond that, and "touches almost nothing else" algorithms (the eventual
-  goal for a late "algorithm phase") likely need more moves here than the 3x3
-  equivalent, given how much a single move disturbs.
-- Systematize the corners-first idea now that orientation is provably a non-issue for
-  corners.
-- Build out more `Relabeling`-based searches for other candidate building-phase moves,
-  now that it's established as the correct tool for "move piece X to Y" requests.
+s

@@ -3,7 +3,10 @@ module Main (main) where
 import Prelude hiding (Left, Right)
 import Lib
 import Search
+import Ergonomics
 import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
+import Data.List (nub)
 import System.Exit (exitFailure)
 
 turns :: String -> [Turn]
@@ -50,6 +53,52 @@ frFlSwapFix broken = search 8 allMoves isSolution broken
     isSolution st =
       edgeRelocated frToFl start st && edgeRelocated flToFr start st
       && preserves protectSlots start st
+
+-- The two-pair edge swap, specified about the R-L axis: FR<->BR and FL<->BL.
+twoPairSwapAboutRL :: BallState -> Bool
+twoPairSwapAboutRL st = all (\m -> edgeRelocated m start st) maps && preserves keep start st
+  where
+    start = toBallState solvedGearBall
+    moved = [edgeSlot Front Right, edgeSlot Back Right, edgeSlot Front Left, edgeSlot Back Left]
+    maps = [ [(Front, Back), (Right, Right)], [(Back, Front), (Right, Right)]
+           , [(Front, Back), (Left, Left)],   [(Back, Front), (Left, Left)] ]
+    keep = Set.fromList (map faceVec allFaceLocations)
+             `Set.union` (Set.fromList allEdgeSlots `Set.difference` Set.fromList moved)
+
+moves :: String -> [Move]
+moves s = [ (f, p) | Turn f p n <- turns s, _ <- [1 .. n] ]
+
+-- The eight algorithms covering the last-slice endgame: two edge slices,
+-- centers and every gear already solved, with the last slice's four edges and
+-- the corners outstanding. Case 1 of the nine is "already solved", so eight
+-- algorithms cover the lot. See ALGORITHMS.md for the case table.
+lastSliceAlgs :: [String]
+lastSliceAlgs =
+  [ "R' U R B R D' R' B'"     -- edges solved, corners half-turned
+  , "L' U' L U L F R' F'"     -- straight swap, corners double-transposed
+  , "L' U' F L U B'"          -- straight swap, corners quadruple-transposed
+  , "L U L U' L' B' R' B"     -- straight swap, the other double
+  , "L U B' R' U' B"          -- straight swap, the other quadruple
+  , "U L F L F' L' U' R'"     -- diagonal swap, corners double-transposed
+  , "U' L' B' U R B"          -- diagonal swap, corners quadruple-transposed
+  , "U L F U' R' F'"          -- diagonal swap, the other quadruple
+  ]
+
+-- The two slices that are already solved: every edge slot off the L-R axis.
+solvedSliceSlots :: [Vec3]
+solvedSliceSlots = [ v | v@(x, _, _) <- allEdgeSlots, x /= 0 ]
+
+-- Spin-neutral: no gear anywhere has been turned.
+allGearsZero :: BallState -> Bool
+allGearsZero st = all (\v -> snd (bsEdges st Map.! v) == Zero) allEdgeSlots
+
+-- The state an algorithm is meant to fix, obtained by running it backwards
+-- from solved.
+caseFor :: String -> GearBall
+caseFor a =
+  fromBallState (foldl (\s (f, p) -> applyBaseTurn f p s)
+                       (toBallState solvedGearBall)
+                       (reverse (map (\(f, p) -> (f, not p)) (moves a))))
 
 check :: String -> Bool -> IO Bool
 check name ok = do
@@ -103,6 +152,100 @@ main = do
     , check "a genuine positional FR/FL swap (U2 F U2 F) needs more than 4 moves"
         (frFlSwapFix (run "U L' F' L'")
           == Just [(Up, False), (Up, False), (Front, False), (Up, False), (Up, False), (Front, False)])
+    , check "searchAll's first result is exactly what search returns"
+        (let p st = matches fullySolved st
+         in take 1 (searchAll 3 allMoves p (run "R")) == maybe [] (: []) (search 3 allMoves p (run "R")))
+    , check "searchAll finds all 64 six-move two-pair swaps about the R-L axis"
+        (length (searchAll 6 allMoves twoPairSwapAboutRL solvedGearBall) == 64)
+
+    -- Ergonomics. The scorer never searches; it ranks what the searcher emitted.
+    , check "there are 24 distinct holds" (length allHolds == 24)
+    , check "an all-R algorithm costs 1 for the first turn and 2 per repeat"
+        (exCost (score (moves "R R R")) == 1 + 2 + 2)
+    , check "U costs 1.5 and the awkward faces cost 2"
+        (map (exCost . score . moves) ["R", "L", "U", "D", "F", "B"] == [1, 1, 1.5, 2, 2, 2])
+    , check "a lone F cannot be improved - no R/L turn precedes it to re-hold on"
+        (renderExecution (score (moves "F")) == "F")
+    , check "R' F is executed as R' x U, turning the awkward F into a U"
+        (renderExecution (score (moves "R' F")) == "R' x U")
+    , check "and that re-hold is what makes it cheaper than the literal 1 + 2"
+        (exCost (score (moves "R' F")) == 1 + 1.5)
+    , check "every execution of every two-pair-swap candidate really does the job"
+        (let cands = searchAll 6 allMoves twoPairSwapAboutRL solvedGearBall
+             start = toBallState solvedGearBall
+         in and [ verifyExecution ms ex start
+                | ms <- cands, ex <- executions identityHold ms ])
+    , check "the best-scoring six-move two-pair swap about R-L scores 8.5"
+        (let cands = searchAll 6 allMoves twoPairSwapAboutRL solvedGearBall
+         in minimum (map (exCost . score) cands) == 8.5)
+    , check "no R/L/U-only two-pair swap exists within 8 moves"
+        (null (searchAll 8 (movesFor [Right, Left, Up]) twoPairSwapAboutRL solvedGearBall))
+
+    -- Diagonal edge swap: FU<->BD and FD<->BU, each edge crossing to the slot
+    -- antipodal to it, with every gear left as it was found.
+    , check "the diagonal edge swap does exactly what it claims, gears included"
+        (let start = toBallState solvedGearBall
+             end = toBallState (run "U L F U' R' F'")
+             maps = [ [(Front, Back), (Up, Down)], [(Back, Front), (Down, Up)]
+                    , [(Front, Back), (Down, Up)], [(Back, Front), (Up, Down)] ]
+             moved = [edgeSlot Front Up, edgeSlot Back Down, edgeSlot Front Down, edgeSlot Back Up]
+             keep = Set.fromList (map faceVec allFaceLocations)
+                      `Set.union` (Set.fromList allEdgeSlots `Set.difference` Set.fromList moved)
+         in all (\m -> edgeRelocated m start end) maps && preserves keep start end)
+    , check "the diagonal edge swap is an involution"
+        (isSolved (applyMoves (run "U L F U' R' F'") (turns "U L F U' R' F'")))
+    , check "6 moves is optimal for the diagonal edge swap"
+        (let start = toBallState solvedGearBall
+             maps = [ [(Front, Back), (Up, Down)], [(Back, Front), (Down, Up)]
+                    , [(Front, Back), (Down, Up)], [(Back, Front), (Up, Down)] ]
+             moved = [edgeSlot Front Up, edgeSlot Back Down, edgeSlot Front Down, edgeSlot Back Up]
+             keep = Set.fromList (map faceVec allFaceLocations)
+                      `Set.union` (Set.fromList allEdgeSlots `Set.difference` Set.fromList moved)
+             ok st = all (\m -> edgeRelocated m start st) maps && preserves keep start st
+         in all ((== 6) . length) (searchAll 6 allMoves ok solvedGearBall))
+    , check "it scores 8.5, performed as U L F U' R' x U'"
+        (let ex = score (moves "U L F U' R' F'")
+         in exCost ex == 8.5 && renderExecution ex == "U L F U' R' x U'")
+    , check "and no re-hold beats holding it exactly as written"
+        (exCost (snd (bestHold (moves "U L F U' R' F'"))) == 8.5)
+
+    -- The corner-only algorithm, chosen for ergonomics out of the 12,288
+    -- 8-move ones. It must leave every edge and center byte-identical.
+    , check "the recommended corner algorithm touches no edge and no center"
+        (let start = toBallState solvedGearBall
+             keep = Set.fromList (allEdgeSlots ++ map faceVec allFaceLocations)
+         in preserves keep start (toBallState (run "R' U R B R D' R' B'")))
+    , check "it moves the corners (it is not a no-op)"
+        (not (isSolved (run "R' U R B R D' R' B'")))
+    , check "it is an involution"
+        (isSolved (applyMoves (run "R' U R B R D' R' B'") (turns "R' U R B R D' R' B'")))
+    , check "it executes as R' U R x' U R x' U' R' x U', touching only R and U"
+        (renderExecution (score (moves "R' U R B R D' R' B'")) == "R' U R x' U R x' U' R' x U'")
+    , check "that execution scores 10.0, beating the plainer L F' U B' L' B U' F at 13.0"
+        (exCost (score (moves "R' U R B R D' R' B'")) == 10.0
+          && exCost (score (moves "L F' U B' L' B U' F")) == 13.0)
+    , check "and it really is equivalent to the written algorithm"
+        (verifyExecution (moves "R' U R B R D' R' B'")
+                         (score (moves "R' U R B R D' R' B'"))
+                         (toBallState solvedGearBall))
+
+    -- The last-slice endgame. Each algorithm must be spin-neutral and must
+    -- leave the two already-solved slices and the centers exactly alone.
+    , check "every last-slice algorithm leaves all 12 gears unspun"
+        (all (allGearsZero . toBallState . run) lastSliceAlgs)
+    , check "every last-slice algorithm leaves the two solved slices and centers alone"
+        (let start = toBallState solvedGearBall
+             keep = Set.fromList (map faceVec allFaceLocations ++ solvedSliceSlots)
+         in all (\a -> preserves keep start (toBallState (run a))) lastSliceAlgs)
+    , check "each last-slice algorithm solves the case it is for"
+        (all (\a -> isSolved (applyMoves (caseFor a) (turns a))) lastSliceAlgs)
+    , check "the 8 last-slice cases are pairwise distinct"
+        (length (nub (map caseFor lastSliceAlgs)) == 8)
+    , check "and none of those 8 cases is already solved"
+        (not (any (isSolved . caseFor) lastSliceAlgs))
+    , check "no last-slice algorithm is longer than 8 moves"
+        (all ((<= 8) . length . moves) lastSliceAlgs)
+
     , check "edgeRelocated distinguishes FR-to-FL from the flipped FR-to-LF"
         (let start = toBallState (run "U L' F' L'")
              result = toBallState (applyMoves (run "U L' F' L'") (turns "U2 F U2 F"))
